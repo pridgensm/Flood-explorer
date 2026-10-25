@@ -342,6 +342,10 @@
       if (!isError && !sticky) toastTimer = setTimeout(() => { toastMsg.hidden = true; }, 4000);
     }
 
+    // Surface unexpected errors in the panel instead of failing silently
+    window.addEventListener("error", e => showToast(`Error: ${e.message}. See console.`, true));
+    window.addEventListener("unhandledrejection", e => showToast(`Error: ${e.reason?.message ?? e.reason}. See console.`, true));
+
     // --- Load the SDK and wait until $arcgis exists (fixes the load-order race) ---
     async function loadSdk(timeoutMs = 20000) {
       try {
@@ -435,8 +439,15 @@
     }
 
     // Frame every county that loaded
-    const fullExt = roads.map(r => r.layer.fullExtent).filter(Boolean).reduce((a, b) => a.union(b), null);
-    if (fullExt) mapEl.view.goTo(fullExt.clone().expand(1.1)).catch(() => {});
+    try {
+      const exts = roads.map(r => r.layer.fullExtent).filter(Boolean);
+      if (exts.length) {
+        const fullExt = exts.slice(1).reduce((a, b) => a.union(b), exts[0].clone());
+        mapEl.view.goTo(fullExt.expand(1.1)).catch(() => {});
+      }
+    } catch (err) {
+      console.warn("Couldn't zoom to the counties:", err); // not fatal; keep the default view
+    }
 
     // --- Popup ---
     const elevExpr = r => ({
