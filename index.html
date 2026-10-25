@@ -153,16 +153,16 @@
     .swatch { width: 32px; margin-right: 12px; flex-shrink: 0; }
     /* Legend colors follow the map: light-basemap set by default, imagery set when body.imagery */
     body {
-      --sym-dry: rgba(156, 163, 175, 0.5);
+      --sym-dry: rgba(156, 163, 175, 0.45);
       --sym-nodata: #f59e0b;
       --sym-bridgept: #7c3aed;
     }
     body.imagery {
       --sym-bridgept: #f0abfc;
-      --sym-dry: #cbd5e1;
+      --sym-dry: rgba(226, 232, 240, 0.9);
       --sym-nodata: #fbbf24;
     }
-    .sw-dry { height: 3px; background: var(--sym-dry); border-radius: 2px; }
+    .sw-dry { height: 2px; background: var(--sym-dry); border-radius: 2px; }
     .sw-nodata { height: 0; border-top: 3px dotted var(--sym-nodata); }
     .sw-bridgept {
       width: 10px; height: 10px; margin: 0 23px 0 11px;
@@ -245,7 +245,7 @@
     </div>
 
     <div class="panel-body" id="panelBody">
-    <p class="subtitle">Beaufort and Charleston counties. Drag the slider to simulate coastal water levels and identify inundated road segments.</p>
+    <p class="subtitle">Beaufort, Colleton, and Charleston counties. Drag the slider to simulate coastal water levels and identify inundated road segments.</p>
 
     <div class="slider-head">
       <label for="elevSlider">Simulated Water Level</label>
@@ -275,7 +275,7 @@
     </label>
     <label class="check" style="margin: 0 0 8px;">
       <input type="checkbox" id="bridgeToggle" checked />
-      Show bridge points
+      Show bridges on mapped roads
     </label>
     <label class="check" style="margin: 0;">
       <input type="checkbox" id="noaaToggle" checked disabled />
@@ -290,7 +290,7 @@
     <div id="floodLegend"></div>
     <div class="legend-row"><div class="swatch sw-dry"></div>Dry</div>
     <div class="legend-row"><div class="swatch sw-nodata"></div>No elevation data</div>
-    <div class="legend-row"><div class="swatch sw-bridgept"></div>Bridge (Statewide_Bridges)</div>
+    <div class="legend-row"><div class="swatch sw-bridgept"></div>Bridge on a mapped road (its segments may look flooded but are left out of the export)</div>
     <div class="legend-sub">NOAA SLR Viewer</div>
     <div class="legend-row"><div class="swatch sw-noaa-depth"></div>Inundated (connected to tidal water)</div>
     <div class="legend-row"><div class="swatch sw-noaa-low"></div>Low-lying (below level, not connected)</div>
@@ -385,7 +385,10 @@
         datums: { MHHW: 3.45, MHW: 3.08, MSL: -0.23, MLLW: -4.05 } },
       { county: "Charleston", itemId: "2538464dc97a442b9dea0b35d5d82e42", layerId: 0,
         gauge: "Wando River Entrance 8665192",  // MLLW=0: MHHW 1.806, MHW 1.697, MSL 0.918, NAVD88 0.971 m
-        datums: { MHHW: 2.74, MHW: 2.38, MSL: -0.17, MLLW: -3.19 } }
+        datums: { MHHW: 2.74, MHW: 2.38, MSL: -0.17, MLLW: -3.19 } },
+      { county: "Colleton",   itemId: "ba0966e4ed044eab9fa1f22476a79f54", layerId: 0,
+        gauge: "Edisto Marina 8667676",         // MLLW=0: MHHW 1.987, MHW 1.876, MSL 1.009, NAVD88 1.107 m
+        datums: { MHHW: 2.89, MHW: 2.52, MSL: -0.32, MLLW: -3.63 } }
     ];
     // Field names are detected per layer (case-insensitive), so counties can name them differently
     const ELEV_NAMES  = ["elev_ft", "elevft", "elev", "elevation_ft", "elevation"];
@@ -396,11 +399,9 @@
       layer: new FeatureLayer({ portalItem: { id: src.itemId }, layerId: src.layerId, outFields: ["*"] }),
       elevField: null,
       routeField: null,
-      bridgeOids: new Set(), // road segments that sit on bridges (filled in after bridge matching)
-      overlay: null
+      bridgeOids: new Set() // road segments that sit on bridges (left out of the export; filled in after matching)
     }));
 
-    // Roads live in a group so the bridge "eraser" layers only cut out roads, not the basemap
     const roadGroup = new GroupLayer({ title: "Roads", layers: roads.map(r => r.layer) });
 
     await mapEl.viewOnReady();
@@ -485,17 +486,17 @@
       light: {
         road:   { color: [37, 99, 235, 1],  width: 3 },    // flooded = blue
         nodata: { color: [245, 158, 11, 1], width: 2 },    // amber dots
+        dry:    { color: [156, 163, 175, 0.45], width: 2 }, // dry = faded gray
         bridgePt: { color: [124, 58, 237, 1] },            // bridge points = purple
         // depth ramp, shallow → deep (one color per DEPTH_CLASSES entry)
         depth: [[147, 197, 253, 1], [59, 130, 246, 1], [29, 78, 216, 1], [109, 40, 217, 1], [134, 25, 143, 1], [74, 4, 78, 1]],
-        dryEffect: "grayscale(100%) opacity(35%)"          // dry = faded gray
       },
       imagery: {
         road:   { color: [34, 211, 238, 1], width: 3.5 },  // flooded = cyan
         nodata: { color: [251, 191, 36, 1], width: 2.5 },  // bright amber dots
+        dry:    { color: [226, 232, 240, 0.7], width: 2 },  // dry = soft white
         bridgePt: { color: [240, 171, 252, 1] },           // bridge points = light magenta
         depth: [[103, 232, 249, 1], [34, 211, 238, 1], [14, 165, 233, 1], [99, 102, 241, 1], [192, 38, 211, 1], [244, 63, 94, 1]],
-        dryEffect: "grayscale(100%) brightness(300%) opacity(65%)" // dry = soft white
       }
     };
     const IMAGERY_BASEMAPS = ["satellite", "hybrid"];
@@ -521,12 +522,6 @@
       if (!bridgeLayer.popupTemplate) bridgeLayer.popupTemplate = bridgeLayer.createPopupTemplate();
     }
 
-    // Opaque line slightly wider than the roads; its blend mode erases the roads beneath it
-    const bridgeRenderer = () => ({
-      type: "simple",
-      symbol: { type: "simple-line", color: [0, 0, 0, 1], width: palette.road.width + 1, cap: "butt" }
-    });
-
     // Flood depth classes (ft above the road surface) and their colors, light → dark
     const DEPTH_CLASSES = [
       { lo: 0, hi: 0.5, label: "0 – 0.5 ft" },
@@ -538,29 +533,21 @@
     ];
     const rgba = c => `rgba(${c[0]},${c[1]},${c[2]},${c[3] ?? 1})`;
 
-    // Class breaks run on the plain elevation field (no Arcade): depth d in [lo, hi) ⇔ Elev in (L−hi, L−lo]
+    // One class-breaks renderer on the plain elevation field does everything (no Arcade, no feature effect):
+    // flooded segments by depth (or one color), dry segments faded, missing elevations dotted.
+    // Depth d in [lo, hi) ⇔ Elev in (L−hi, L−lo]
     function applyRoadRenderer() {
       const nodataSym = { type: "simple-line", ...palette.nodata, style: "dot" };
       for (const r of roads) {
-        if (!depthToggle.checked) {
-          r.layer.renderer = {
-            type: "unique-value",
-            valueExpression: `IIf(IsEmpty($feature["${r.elevField}"]), 'NoData', 'Road')`,
-            uniqueValueInfos: [
-              { value: "Road",   symbol: { type: "simple-line", ...palette.road } },
-              { value: "NoData", symbol: nodataSym }
-            ]
-          };
-          continue;
-        }
         const L = navdFor(r) + 0.0005; // tiny pad so segments exactly at the water level count as flooded
-        const classBreakInfos = DEPTH_CLASSES.map((c, i) => ({
-          minValue: c.hi === Infinity ? -10000 : L - c.hi,
-          maxValue: L - c.lo,
-          symbol: { type: "simple-line", color: palette.depth[i], width: palette.road.width }
-        }));
-        // Dry segments keep the base road color; the feature effect fades them to gray
-        classBreakInfos.push({ minValue: L, maxValue: 100000, symbol: { type: "simple-line", ...palette.road } });
+        const classBreakInfos = depthToggle.checked
+          ? DEPTH_CLASSES.map((c, i) => ({
+              minValue: c.hi === Infinity ? -10000 : L - c.hi,
+              maxValue: L - c.lo,
+              symbol: { type: "simple-line", color: palette.depth[i], width: palette.road.width }
+            }))
+          : [{ minValue: -10000, maxValue: L, symbol: { type: "simple-line", ...palette.road } }];
+        classBreakInfos.push({ minValue: L, maxValue: 100000, symbol: { type: "simple-line", ...palette.dry } });
         r.layer.renderer = { type: "class-breaks", field: r.elevField, defaultSymbol: nodataSym, classBreakInfos };
       }
     }
@@ -574,38 +561,26 @@
         : row(palette.road.color, "Flooded (at or below water level)");
     }
 
-    // Only the depth renderer depends on the level, so don't rebuild the plain renderer on every slider move
+    // Redraw shortly after the level stops changing (longer pause on phones to spare memory while dragging)
     const scheduleRoadRenderer = () => {
-      if (!depthToggle.checked) return;
       clearTimeout(rendererTimer);
-      rendererTimer = setTimeout(applyRoadRenderer, 120);
+      rendererTimer = setTimeout(applyRoadRenderer, IS_MOBILE ? 300 : 120);
     };
 
     function applyRenderer() {
       applyRoadRenderer();
       buildFloodLegend();
-      for (const r of roads) if (r.overlay) r.overlay.renderer = bridgeRenderer();
       applyBridgePoints();
     }
 
-    // --- Where clauses (shared logic so map and export always agree) ---
-    const displayWhere = (r, lvl) => `${r.elevField} <= ${lvl} OR ${r.elevField} IS NULL`; // full color
-    const exportWhere  = (r, lvl) => `${r.elevField} <= ${lvl}`;                           // flooded (bridges removed after query)
-
-    // --- Slider: feature effect is applied client-side, no renderer rebuild ---
-    function updateFlood() {
-      for (const r of roads) {
-        r.layer.featureEffect = {
-          filter: { where: displayWhere(r, navdStr(r)) },
-          excludedEffect: palette.dryEffect
-        };
-      }
-    }
+    // --- Export where clause: matches the renderer's flooded classes ---
+    const exportWhere = (r, lvl) => `${r.elevField} <= ${lvl}`; // bridges removed after the query
 
     bridgeToggle.addEventListener("change", () => { if (bridgeLayer) bridgeLayer.visible = bridgeToggle.checked; });
 
     // --- Bridges: match road segments to Statewide_Bridges live, on every page load ---
     // Each bridge flags road segments within (half its length + slop) of the bridge location.
+    // Flagged segments are left out of the export. They are NOT cut from the map (that cost too much memory on phones).
     const BRIDGE_URL = "https://services1.arcgis.com/VaY7cY9pvUYUP1Lf/arcgis/rest/services/Statewide_Bridges/FeatureServer/0";
     const BRIDGE_LENGTH_FIELD = "Structure1"; // bridge length
     const LENGTH_TO_FT = 1;                   // set to 3.281 if Structure1 is in meters
@@ -619,7 +594,8 @@
     }
 
     async function matchBridges() {
-      bridgeLayer = new FeatureLayer({ url: BRIDGE_URL, title: "Bridges", outFields: ["*"], visible: bridgeToggle.checked });
+      // Starts empty; after matching it shows only bridges that touch the mapped roads (not the whole state)
+      bridgeLayer = new FeatureLayer({ url: BRIDGE_URL, title: "Bridges", outFields: ["*"], visible: bridgeToggle.checked, definitionExpression: "1=0" });
       mapEl.map.add(bridgeLayer); // top of the stack so the points sit above the roads
       await bridgeLayer.load();
       applyBridgePoints();
@@ -630,7 +606,7 @@
       console.info(`Bridge layer: ${bridgeLayer.geometryType}, length field: ${lenField ?? "none"}`);
 
       // For each county: bridges inside its extent (paged), then the road segments near each one
-      const seen = new Set();
+      const matched = new Set(); // bridges that touch at least one road segment
       const num = bridgeLayer.capabilities?.query?.maxRecordCount || 1000;
       for (const road of roads) {
         const bridges = [];
@@ -650,7 +626,6 @@
           bridges.push(...r.features);
           if (!r.exceededTransferLimit) break;
         }
-        bridges.forEach(b => seen.add(b.attributes[bridgeLayer.objectIdField]));
 
         const oids = new Set();
         await runPool(bridges, CONCURRENCY, async b => {
@@ -665,57 +640,24 @@
             spatialRelationship: "intersects"
           });
           try {
-            (await road.layer.queryObjectIds(q)).forEach(id => oids.add(id));
+            const ids = await road.layer.queryObjectIds(q);
+            ids.forEach(id => oids.add(id));
+            if (ids.length) matched.add(b.attributes[bridgeLayer.objectIdField]);
           } catch (err) {
             console.warn(`Bridge match failed for one bridge (${road.county}):`, err);
           }
         });
         road.bridgeOids = oids;
-        if (oids.size) await buildBridgeOverlay(road);
       }
-      return { bridgeCount: seen.size };
+      const oidF = bridgeLayer.objectIdField;
+      bridgeLayer.definitionExpression = matched.size ? `${oidF} IN (${[...matched].join(",")})` : "1=0";
+      return { bridgeCount: matched.size };
     }
 
-    // Draw matched segments as their own layer on top of the roads (it erases them; see bridgeRenderer)
-    async function buildBridgeOverlay(road) {
-      const lyr = road.layer;
-      const keep = new Set([lyr.objectIdField.toLowerCase(), road.elevField.toLowerCase()]);
-      const fields = lyr.fields.filter(f => keep.has(f.name.toLowerCase()));
-      const ids = [...road.bridgeOids];
-      const features = [];
-      for (let i = 0; i < ids.length; i += 1000) {
-        const q = lyr.createQuery();
-        Object.assign(q, {
-          where: "1=1",
-          objectIds: ids.slice(i, i + 1000),
-          outFields: fields.map(f => f.name),
-          returnGeometry: true,
-          outSpatialReference: mapEl.view.spatialReference
-        });
-        const r = await lyr.queryFeatures(q);
-        features.push(...r.features);
-      }
-
-      road.overlay = new FeatureLayer({
-        title: `${road.county} bridge segments`,
-        source: features,
-        fields: fields.map(f => f.clone()),
-        objectIdField: lyr.objectIdField,
-        geometryType: "polyline",
-        spatialReference: mapEl.view.spatialReference,
-        renderer: bridgeRenderer(),
-        blendMode: "destination-out", // erase road segments on bridges (within the road group only)
-        popupEnabled: false,
-        listMode: "hide",
-        minScale: road.layer.minScale // match the roads (hidden at county scale on phones)
-      });
-      roadGroup.add(road.overlay); // added last, so it sits above the roads in the group
-    }
-
-    showToast(`Removing bridges from flood results…${skippedNote}`, false, true);
+    showToast(`Matching bridges…${skippedNote}`, false, true);
     const bridgesReady = matchBridges()
       .then(({ bridgeCount }) => {
-        showToast(`${bridgeCount.toLocaleString()} bridge${bridgeCount === 1 ? "" : "s"} removed from flood results.${skippedNote}`, skipped.length > 0);
+        showToast(`${bridgeCount.toLocaleString()} bridge${bridgeCount === 1 ? "" : "s"} found; bridge segments are left out of the export.${skippedNote}`, skipped.length > 0);
       })
       .catch(err => {
         console.error("Bridge matching failed:", err);
@@ -731,6 +673,7 @@
     const NOAA_OPACITY = 0.6;
     const NOAA_KEEP = 3; // 3) only keep the last few NOAA steps loaded; each one holds its own tile cache
     const noaaToggle = document.getElementById("noaaToggle");
+    if (IS_MOBILE) noaaToggle.checked = false; // NOAA tiles are the heaviest layer; opt in on phones
     const noaaNote = document.getElementById("noaaNote");
     const noaaCache = new Map();
     let noaaShown = null;
@@ -800,7 +743,7 @@
       showNoaa(step == null ? null : noaaLayerFor(step));
 
       if (!noaaToggle.checked) {
-        noaaNote.textContent = "";
+        noaaNote.textContent = IS_MOBILE ? "Off by default on phones; turning it on uses more memory." : "";
       } else if (step == null) {
         noaaNote.textContent = "Below MHHW, so NOAA shows no inundation.";
       } else {
@@ -833,7 +776,6 @@
 
     function refreshAll() {
       updateNoaa();
-      updateFlood();
       scheduleRoadRenderer();
     }
 
@@ -891,7 +833,6 @@
         if (next === palette) return;
         palette = next;
         applyRenderer();
-        updateFlood();
       },
       { initial: true }
     );
