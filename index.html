@@ -697,7 +697,7 @@
     showToast(`Removing bridges from flood results…${skippedNote}`, false, true);
     const bridgesReady = matchBridges()
       .then(({ bridgeCount }) => {
-        showToast(`${bridgeCount.toLocaleString()} bridges removed from flood results.${skippedNote}`, skipped.length > 0);
+        showToast(`${bridgeCount.toLocaleString()} bridge${bridgeCount === 1 ? "" : "s"} removed from flood results.${skippedNote}`, skipped.length > 0);
       })
       .catch(err => {
         console.error("Bridge matching failed:", err);
