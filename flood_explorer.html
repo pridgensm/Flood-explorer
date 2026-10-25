@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beaufort County Flood Explorer</title>
+
+  <!-- ArcGIS Maps SDK for JavaScript 5.1 styles (the SDK itself is loaded by the app script below) -->
+  <link rel="stylesheet" href="https://js.arcgis.com/5.1/esri/themes/light/main.css" />
+
+  <style>
+    :root {
+      --blue: #2563eb;
+      --blue-dark: #1d4ed8;
+      --blue-bg: #dbeafe;
+      --blue-text: #1e40af;
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --gray: #9ca3af;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --error-bg: #fef2f2;
+      --error-text: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      width: 100%;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: var(--text);
+    }
+    body { position: relative; }
+    arcgis-map { display: block; height: 100%; width: 100%; }
+
+    /* Floating panel */
+    .panel {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      width: min(384px, calc(100% - 32px));
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(4px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+      padding: 20px;
+      z-index: 10;
+    }
+    .panel { max-height: calc(100% - 32px); overflow-y: auto; }
+    .panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .panel h1 { font-size: 1.25rem; margin: 0; flex: 1; }
+    .mini {
+      display: none;
+      background: var(--blue-bg);
+      color: var(--blue-text);
+      font-weight: 700;
+      font-size: 0.9rem;
+      padding: 2px 8px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .collapse-btn {
+      width: 36px !important;
+      height: 36px;
+      padding: 0 !important;
+      flex-shrink: 0;
+      background: transparent !important;
+      color: var(--muted) !important;
+      box-shadow: none !important;
+      border-radius: 8px;
+    }
+    .collapse-btn:hover { background: var(--border) !important; }
+    .collapse-btn svg { width: 20px; height: 20px; transition: transform 0.2s; }
+
+    /* Collapsed: just the title bar with the current level */
+    .panel.collapsed { width: auto; padding: 10px 10px 10px 16px; }
+    .panel.collapsed .panel-head { margin-bottom: 0; }
+    .panel.collapsed .panel-body { display: none; }
+    .panel.collapsed .mini { display: inline-block; }
+    .panel.collapsed .mini:empty { display: none; }
+    .panel.collapsed .collapse-btn svg { transform: rotate(180deg); }
+    .panel.collapsed .toast { margin-top: 8px; }
+
+    @media (max-width: 640px) {
+      .panel { top: 8px; left: 8px; width: calc(100% - 16px); max-height: calc(100% - 16px); padding: 16px; }
+      .panel h1 { font-size: 1.05rem; }
+    }
+    .panel h2 { font-size: 0.875rem; margin: 0 0 12px; }
+    .subtitle { font-size: 0.875rem; color: var(--muted); margin: 0 0 20px; }
+    hr { border: 0; border-top: 1px solid var(--border); margin: 16px 0; }
+
+    /* Slider */
+    .slider-head { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
+    .slider-head label { font-weight: 600; font-size: 0.875rem; }
+    .readout {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      background: var(--blue-bg);
+      color: var(--blue-text);
+      font-size: 1.125rem;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 8px;
+      cursor: text;
+    }
+    .readout:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .readout input {
+      width: 5ch;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      font: inherit;
+      color: inherit;
+      text-align: right;
+      -moz-appearance: textfield;
+      appearance: textfield;
+    }
+    .readout input:focus { outline: none; }
+    .readout input::-webkit-outer-spin-button,
+    .readout input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .hint { font-size: 0.75rem; color: var(--muted); margin: 6px 0 0; }
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 20px; width: 20px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    input[type=range]::-moz-range-thumb {
+      height: 20px; width: 20px;
+      border: 0;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    input[type=range]:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+    .ticks { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--gray); margin-top: 8px; padding: 0 4px; }
+
+    /* Legend */
+    .legend-row { display: flex; align-items: center; margin-bottom: 8px; font-size: 0.875rem; }
+    .swatch { width: 32px; margin-right: 12px; flex-shrink: 0; }
+    /* Legend colors follow the map: light-basemap set by default, imagery set when body.imagery */
+    body {
+      --sym-flooded: #2563eb;
+      --sym-dry: rgba(156, 163, 175, 0.5);
+      --sym-bridge: #22c55e;
+      --sym-nodata: #f59e0b;
+    }
+    body.imagery {
+      --sym-flooded: #22d3ee;
+      --sym-dry: #cbd5e1;
+      --sym-bridge: #a3e635;
+      --sym-nodata: #fbbf24;
+    }
+    .sw-flooded { height: 4px; background: var(--sym-flooded); border-radius: 2px; }
+    .sw-dry { height: 3px; background: var(--sym-dry); border-radius: 2px; }
+    .sw-nodata { height: 0; border-top: 3px dotted var(--sym-nodata); }
+    .sw-noaa-depth { height: 12px; background: rgba(30, 100, 200, 0.5); border-radius: 3px; }
+    .sw-noaa-low { height: 12px; background: rgba(60, 170, 75, 0.5); border-radius: 3px; }
+    .legend-sub { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin: 12px 0 8px; }
+    .noaa-note { margin-top: 4px; }
+
+    /* Export */
+    button {
+      width: 100%;
+      display: flex; justify-content: center; align-items: center; gap: 8px;
+      background: var(--blue);
+      color: #fff;
+      font: inherit;
+      font-weight: 600;
+      padding: 8px 16px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      transition: background 0.15s;
+    }
+    button:hover { background: var(--blue-dark); }
+    button:disabled { opacity: 0.7; cursor: wait; }
+    button svg { width: 16px; height: 16px; }
+    .check {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.875rem;
+      margin-bottom: 12px;
+      cursor: pointer;
+    }
+    .check input { width: 16px; height: 16px; accent-color: var(--blue); }
+    .check:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+    .toast {
+      margin-top: 12px;
+      text-align: center;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--blue-dark);
+      background: #eff6ff;
+      padding: 4px;
+      border-radius: 6px;
+    }
+    .toast.error { color: var(--error-text); background: var(--error-bg); }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <arcgis-map basemap="gray-vector" center="-80.7,32.4" zoom="10">
+    <arcgis-zoom slot="top-right"></arcgis-zoom>
+    <arcgis-compass slot="top-right"></arcgis-compass>
+    <!-- Click to flip between the gray basemap and satellite imagery with labels -->
+    <arcgis-basemap-toggle slot="bottom-right" next-basemap="hybrid"></arcgis-basemap-toggle>
+  </arcgis-map>
+
+  <div class="panel" id="panel">
+    <div class="panel-head">
+      <h1>Flood Scenario Explorer</h1>
+      <span class="mini" id="miniLevel"></span>
+      <button class="collapse-btn" id="collapseBtn" aria-expanded="true" aria-controls="panelBody" title="Collapse panel">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path></svg>
+      </button>
+    </div>
+
+    <div class="panel-body" id="panelBody">
+    <p class="subtitle">Drag the slider to simulate coastal water levels and identify inundated road segments.</p>
+
+    <div class="slider-head">
+      <label for="elevSlider">Simulated Water Level</label>
+      <label class="readout" for="levelInput">
+        <input type="number" id="levelInput" step="0.1" inputmode="decimal" placeholder="…" aria-label="Water level in feet (NAVD88)" disabled />
+        <span>ft</span>
+      </label>
+    </div>
+    <input type="range" id="elevSlider" min="3.0" max="15.0" step="0.1" value="5.0" disabled />
+    <div class="ticks"><span>3 ft</span><span>NAVD88</span><span>15 ft</span></div>
+    <p class="hint">Drag the slider or type a level in the box (values outside 3 to 15 ft are allowed).</p>
+
+    <label class="check" style="margin: 12px 0 0;">
+      <input type="checkbox" id="noaaToggle" checked disabled />
+      Show NOAA sea level rise inundation
+    </label>
+    <p class="hint noaa-note" id="noaaNote"></p>
+
+    <hr />
+
+    <h2>Road Status</h2>
+    <div class="legend-row"><div class="swatch sw-flooded"></div>Flooded (at or below water level)</div>
+    <div class="legend-row"><div class="swatch sw-dry"></div>Dry</div>
+    <div class="legend-row"><div class="swatch sw-nodata"></div>No elevation data</div>
+    <div class="legend-sub">NOAA SLR Viewer</div>
+    <div class="legend-row"><div class="swatch sw-noaa-depth"></div>Inundated (connected to tidal water)</div>
+    <div class="legend-row"><div class="swatch sw-noaa-low"></div>Low-lying (below level, not connected)</div>
+
+    <hr />
+
+    <label class="check">
+      <input type="checkbox" id="groupByRoute" checked disabled />
+      One row per route (Route_LRS)
+    </label>
+    <button id="exportBtn" disabled>
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+      Export Flooded Roads (CSV)
+    </button>
+    </div><!-- /panel-body -->
+
+    <!-- Outside the body so messages still show when collapsed -->
+    <div id="toastMsg" class="toast" role="status" hidden></div>
+  </div>
+
+  <script type="module">
+    const SDK_URL = "https://js.arcgis.com/5.1/";
+
+    const mapEl = document.querySelector("arcgis-map");
+    const slider = document.getElementById("elevSlider");
+    const levelInput = document.getElementById("levelInput");
+    const exportBtn = document.getElementById("exportBtn");
+    const toastMsg = document.getElementById("toastMsg");
+    const exportLabel = exportBtn.innerHTML;
+    let toastTimer;
+
+    // --- Collapsible panel (starts collapsed on phone-size screens) ---
+    const panel = document.getElementById("panel");
+    const collapseBtn = document.getElementById("collapseBtn");
+    const miniLevel = document.getElementById("miniLevel");
+
+    function setCollapsed(collapsed) {
+      panel.classList.toggle("collapsed", collapsed);
+      collapseBtn.setAttribute("aria-expanded", String(!collapsed));
+      collapseBtn.title = collapsed ? "Expand panel" : "Collapse panel";
+    }
+    collapseBtn.addEventListener("click", () => setCollapsed(!panel.classList.contains("collapsed")));
+    setCollapsed(window.matchMedia("(max-width: 640px)").matches);
+
+    function showToast(msg, isError = false, sticky = false) {
+      clearTimeout(toastTimer);
+      toastMsg.textContent = msg;
+      toastMsg.classList.toggle("error", isError);
+      toastMsg.hidden = false;
+      if (!isError && !sticky) toastTimer = setTimeout(() => { toastMsg.hidden = true; }, 4000);
+    }
+
+    // --- Load the SDK and wait until $arcgis exists (fixes the load-order race) ---
+    async function loadSdk(timeoutMs = 20000) {
+      try {
+        await import(SDK_URL);
+      } catch (err) {
+        throw new Error(`Couldn't load the ArcGIS SDK from ${SDK_URL} (network, firewall, or browser blocking it).`);
+      }
+      const t0 = performance.now();
+      while (!globalThis.$arcgis) {
+        if (performance.now() - t0 > timeoutMs) throw new Error("ArcGIS SDK loaded but never initialized.");
+        await new Promise(r => setTimeout(r, 50));
+      }
+    }
+
+    let FeatureLayer, GroupLayer, TileLayer, reactiveUtils;
+    try {
+      await loadSdk();
+      [FeatureLayer, GroupLayer, TileLayer, reactiveUtils] = await $arcgis.import([
+        "@arcgis/core/layers/FeatureLayer.js",
+        "@arcgis/core/layers/GroupLayer.js",
+        "@arcgis/core/layers/TileLayer.js",
+        "@arcgis/core/core/reactiveUtils.js"
+      ]);
+    } catch (err) {
+      console.error(err);
+      showToast(err.message, true);
+      throw err;
+    }
+
+    // --- Layer ---
+    const roadLayer = new FeatureLayer({
+      portalItem: { id: "0759ae23793542dd8506afbde2d3ba87" },
+      layerId: 0,
+      outFields: ["*"]
+    });
+
+    // Roads live in a group so the bridge "eraser" layer only cuts out roads, not the basemap
+    const roadGroup = new GroupLayer({ title: "Roads", layers: [roadLayer] });
+
+    await mapEl.viewOnReady();
+    mapEl.map.add(roadGroup);
+
+    try {
+      await roadLayer.load();
+    } catch (err) {
+      console.error("Layer load error:", err);
+      levelInput.placeholder = "--";
+      showToast(`Failed to load layer: ${err.message}. Check that it's public and the item ID is correct.`, true);
+      throw err;
+    }
+
+    // --- Popup ---
+    const ELEV_EXPR = {
+      name: "elev",
+      expression: "IIf(IsEmpty($feature.Elev_Ft), 'no elevation data', Text($feature.Elev_Ft, '#,##0.0') + ' ft')"
+    };
+    roadLayer.popupTemplate = {
+      title: "Road Elevation Data",
+      content: "This road segment sits at <b>{expression/elev}</b> (NAVD88).",
+      expressionInfos: [ELEV_EXPR]
+    };
+
+    // --- Symbology palettes: one for light basemaps, one for imagery ---
+    // Edit colors [R, G, B, alpha], widths (pt), and the dry-road effect here.
+    const PALETTES = {
+      light: {
+        road:   { color: [37, 99, 235, 1],  width: 3 },    // flooded = blue
+        nodata: { color: [245, 158, 11, 1], width: 2 },    // amber dots
+        dryEffect: "grayscale(100%) opacity(35%)"          // dry = faded gray
+      },
+      imagery: {
+        road:   { color: [34, 211, 238, 1], width: 3.5 },  // flooded = cyan
+        nodata: { color: [251, 191, 36, 1], width: 2.5 },  // bright amber dots
+        dryEffect: "grayscale(100%) brightness(300%) opacity(65%)" // dry = soft white
+      }
+    };
+    const IMAGERY_BASEMAPS = ["satellite", "hybrid"];
+    let palette = PALETTES.light;
+    let bridgeOverlay = null; // client-side "eraser" layer of road segments that sit on bridges
+
+    // Opaque line slightly wider than the roads; its blend mode erases the roads beneath it
+    const bridgeRenderer = () => ({
+      type: "simple",
+      symbol: { type: "simple-line", color: [0, 0, 0, 1], width: palette.road.width + 1, cap: "butt" }
+    });
+
+    // Categories never change, so Arcade runs once per palette switch, not per slider move
+    function applyRenderer() {
+      roadLayer.renderer = {
+        type: "unique-value",
+        valueExpression: "IIf(IsEmpty($feature.Elev_Ft), 'NoData', 'Road')",
+        uniqueValueInfos: [
+          { value: "Road",   symbol: { type: "simple-line", ...palette.road } },
+          { value: "NoData", symbol: { type: "simple-line", ...palette.nodata, style: "dot" } }
+        ]
+      };
+      if (bridgeOverlay) bridgeOverlay.renderer = bridgeRenderer();
+    }
+    applyRenderer();
+
+    // --- Where clauses (shared logic so map and export always agree) ---
+    const displayWhere = lvl => `Elev_Ft <= ${lvl} OR Elev_Ft IS NULL`; // full color
+    const exportWhere  = lvl => `Elev_Ft <= ${lvl}`;                    // flooded (bridges removed after query)
+
+    // --- Slider: feature effect is applied client-side, no renderer rebuild ---
+    function updateFlood(level) {
+      roadLayer.featureEffect = {
+        filter: { where: displayWhere(level) },
+        excludedEffect: palette.dryEffect
+      };
+    }
+
+    // --- Bridges: match road segments to Statewide_Bridges live, on every page load ---
+    // Each bridge flags road segments within (half its length + slop) of the bridge location.
+    const BRIDGE_URL = "https://services1.arcgis.com/VaY7cY9pvUYUP1Lf/arcgis/rest/services/Statewide_Bridges/FeatureServer/0";
+    const BRIDGE_LENGTH_FIELD = "Structure1"; // bridge length
+    const LENGTH_TO_FT = 1;                   // set to 3.281 if Structure1 is in meters
+    const SLOP_FT = 25;                       // allowance for where the bridge point is placed
+    const CONCURRENCY = 8;                    // parallel requests while matching
+
+    async function runPool(items, n, fn) {
+      let i = 0;
+      const worker = async () => { while (i < items.length) await fn(items[i++]); };
+      await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+    }
+
+    async function matchBridges() {
+      const bridgeLayer = new FeatureLayer({ url: BRIDGE_URL });
+      await bridgeLayer.load();
+
+      const lenField = bridgeLayer.fields.find(f => f.name.toLowerCase() === BRIDGE_LENGTH_FIELD.toLowerCase())?.name;
+      if (!lenField) console.warn(`${BRIDGE_LENGTH_FIELD} not found on the bridge layer; using a ${SLOP_FT} ft radius only.`);
+      const isPoint = ["point", "multipoint"].includes(bridgeLayer.geometryType);
+      console.info(`Bridge layer: ${bridgeLayer.geometryType}, length field: ${lenField ?? "none"}`);
+
+      // Bridges inside the road layer's extent (paged)
+      const bridges = [];
+      const num = bridgeLayer.capabilities?.query?.maxRecordCount || 1000;
+      for (let start = 0; ; start += num) {
+        const q = bridgeLayer.createQuery();
+        Object.assign(q, {
+          where: "1=1",
+          geometry: roadLayer.fullExtent ?? mapEl.view.extent,
+          spatialRelationship: "intersects",
+          outFields: [bridgeLayer.objectIdField, lenField].filter(Boolean),
+          returnGeometry: true,
+          start,
+          num,
+          orderByFields: [bridgeLayer.objectIdField]
+        });
+        const r = await bridgeLayer.queryFeatures(q);
+        bridges.push(...r.features);
+        if (!r.exceededTransferLimit) break;
+      }
+
+      // Road segments near each bridge
+      const oids = new Set();
+      await runPool(bridges, CONCURRENCY, async b => {
+        const len = lenField ? Number(b.attributes[lenField]) * LENGTH_TO_FT : NaN;
+        const radius = (isPoint && Number.isFinite(len) && len > 0 ? len / 2 : 0) + SLOP_FT;
+        const q = roadLayer.createQuery();
+        Object.assign(q, {
+          where: "1=1",
+          geometry: b.geometry,
+          distance: radius,
+          units: "feet",
+          spatialRelationship: "intersects"
+        });
+        try {
+          (await roadLayer.queryObjectIds(q)).forEach(id => oids.add(id));
+        } catch (err) {
+          console.warn("Bridge match failed for one bridge:", err);
+        }
+      });
+      return { oids, bridgeCount: bridges.length };
+    }
+
+    // Draw matched segments as their own layer on top of the roads
+    async function buildBridgeOverlay(oids) {
+      const keep = new Set([roadLayer.objectIdField.toLowerCase(), "elev_ft", "route_lrs"]);
+      const fields = roadLayer.fields.filter(f => keep.has(f.name.toLowerCase()));
+      const ids = [...oids];
+      const features = [];
+      for (let i = 0; i < ids.length; i += 1000) {
+        const q = roadLayer.createQuery();
+        Object.assign(q, {
+          where: "1=1",
+          objectIds: ids.slice(i, i + 1000),
+          outFields: fields.map(f => f.name),
+          returnGeometry: true,
+          outSpatialReference: mapEl.view.spatialReference
+        });
+        const r = await roadLayer.queryFeatures(q);
+        features.push(...r.features);
+      }
+
+      bridgeOverlay = new FeatureLayer({
+        title: "Bridge segments",
+        source: features,
+        fields: fields.map(f => f.clone()),
+        objectIdField: roadLayer.objectIdField,
+        geometryType: "polyline",
+        spatialReference: mapEl.view.spatialReference,
+        renderer: bridgeRenderer(),
+        blendMode: "destination-out", // erase road segments on bridges (within the road group only)
+        popupEnabled: false,
+        listMode: "hide"
+      });
+      roadGroup.add(bridgeOverlay); // added last, so it sits above the roads in the group
+    }
+
+    showToast("Removing bridges from flood results…", false, true);
+    const bridgesReady = matchBridges()
+      .then(async ({ oids, bridgeCount }) => {
+        if (oids.size) await buildBridgeOverlay(oids);
+        showToast(`${bridgeCount.toLocaleString()} bridges removed from flood results.`);
+        return oids;
+      })
+      .catch(err => {
+        console.error("Bridge matching failed:", err);
+        showToast("Couldn't load the bridge layer, so bridges are treated as roads. See console.", true);
+        return new Set();
+      });
+
+    // --- NOAA Sea Level Rise Viewer layers, driven by the same NAVD88 level ---
+    // NOAA publishes 0–10 ft above MHHW in 0.5 ft steps (dc_slr/slr_0ft … slr_10ft).
+    // NAVD88 → MHHW uses a single local offset; NOAA's own layers handle spatial MHHW variation.
+    const NOAA_BASE = "https://maps.coast.noaa.gov/arcgis/rest/services/dc_slr/";
+    const MHHW_NAVD88_FT = 3.45; // Fort Pulaski 8670870: MHHW 2.287 m, NAVD88 1.235 m above MLLW (1983–2001 epoch)
+    const NOAA_OPACITY = 0.6;
+    const noaaToggle = document.getElementById("noaaToggle");
+    const noaaNote = document.getElementById("noaaNote");
+    const noaaCache = new Map();
+    let noaaShown = null;
+    let noaaToken = 0;
+
+    // NAVD88 level → nearest NOAA step (ft above MHHW), or null if below MHHW
+    function noaaStep(levelNavd) {
+      const slr = levelNavd - MHHW_NAVD88_FT;
+      if (slr < -0.25) return null;
+      return Math.min(10, Math.max(0, Math.round(slr * 2) / 2));
+    }
+
+    function noaaLayerFor(step) {
+      const name = `slr_${String(step).replace(".", "_")}ft`; // 0 → slr_0ft, 2.5 → slr_2_5ft
+      if (!noaaCache.has(name)) {
+        const lyr = new TileLayer({
+          url: `${NOAA_BASE}${name}/MapServer`,
+          title: `NOAA ${step} ft SLR`,
+          opacity: NOAA_OPACITY,
+          visible: false,
+          listMode: "hide"
+        });
+        noaaCache.set(name, lyr);
+        mapEl.map.add(lyr, 0); // bottom of the operational layers, so roads draw on top
+      }
+      return noaaCache.get(name);
+    }
+
+    // Show the new step once its tiles are drawn, then hide the old one (avoids a blank flash)
+    async function showNoaa(next) {
+      if (next === noaaShown) return;
+      noaaShown = next;
+      const token = ++noaaToken;
+      if (next) {
+        next.visible = true;
+        try {
+          const lv = await mapEl.view.whenLayerView(next);
+          await reactiveUtils.whenOnce(() => !lv.updating);
+        } catch (err) {
+          console.warn("NOAA layer failed to draw:", err);
+        }
+      }
+      if (token !== noaaToken) return; // a newer level took over
+      for (const l of noaaCache.values()) if (l !== noaaShown) l.visible = false;
+    }
+
+    function updateNoaa(levelNavd) {
+      const step = noaaToggle.checked ? noaaStep(levelNavd) : null;
+      showNoaa(step == null ? null : noaaLayerFor(step));
+
+      if (!noaaToggle.checked) {
+        noaaNote.textContent = "";
+      } else if (step == null) {
+        noaaNote.textContent = `Below MHHW (≈${MHHW_NAVD88_FT} ft NAVD88), so NOAA shows no inundation.`;
+      } else {
+        const capped = levelNavd - MHHW_NAVD88_FT > 10.25 ? " (NOAA's maximum)" : "";
+        noaaNote.textContent = `Showing NOAA ${step} ft above MHHW ≈ ${(step + MHHW_NAVD88_FT).toFixed(2)} ft NAVD88${capped}.`;
+      }
+    }
+
+    noaaToggle.addEventListener("change", () => updateNoaa(currentLevel));
+
+    // --- Water level state, shared by slider + key-in box ---
+    let currentLevel = parseFloat(slider.value);
+    const fmt = v => v.toFixed(1);
+
+    function setLevel(v, source) {
+      currentLevel = Math.round(v * 10) / 10;
+      if (source !== "input") levelInput.value = fmt(currentLevel);
+      if (source !== "slider") slider.value = currentLevel; // slider pins at its ends for out-of-range values
+      miniLevel.textContent = `${fmt(currentLevel)} ft`;
+      updateNoaa(currentLevel);
+      updateFlood(fmt(currentLevel));
+    }
+
+    slider.addEventListener("input", e => setLevel(parseFloat(e.target.value), "slider"));
+
+    // Update live while typing; ignore partial entries like "-" or ""
+    levelInput.addEventListener("input", e => {
+      const v = parseFloat(e.target.value);
+      if (Number.isFinite(v)) setLevel(v, "input");
+    });
+    // On Enter / blur, tidy the box back to one decimal (or the last valid value)
+    levelInput.addEventListener("change", () => { levelInput.value = fmt(currentLevel); });
+    levelInput.addEventListener("keydown", e => { if (e.key === "Enter") levelInput.blur(); });
+
+    setLevel(currentLevel);
+
+    // --- Swap palettes (map + legend) whenever the basemap changes ---
+    reactiveUtils.watch(
+      () => mapEl.map?.basemap?.id,
+      id => {
+        const isImagery = IMAGERY_BASEMAPS.includes(id);
+        const next = isImagery ? PALETTES.imagery : PALETTES.light;
+        document.body.classList.toggle("imagery", isImagery);
+        if (next === palette) return;
+        palette = next;
+        applyRenderer();
+        updateFlood(fmt(currentLevel));
+      },
+      { initial: true }
+    );
+
+    // --- Route grouping option (only if the layer has a Route_LRS field) ---
+    const groupBox = document.getElementById("groupByRoute");
+    const routeField = roadLayer.fields.find(f => f.name.toLowerCase() === "route_lrs")?.name;
+    if (routeField) {
+      groupBox.disabled = false;
+    } else {
+      groupBox.checked = false;
+      groupBox.closest("label").title = "No Route_LRS field found in this layer";
+    }
+
+    slider.disabled = false;
+    levelInput.disabled = false;
+    noaaToggle.disabled = false;
+    exportBtn.disabled = false;
+
+    // --- Export ---
+    async function queryAll(where) {
+      const num = roadLayer.capabilities?.query?.maxRecordCount || 1000;
+      const out = [];
+      let start = 0;
+      while (true) {
+        const q = roadLayer.createQuery();
+        Object.assign(q, {
+          where,
+          outFields: ["*"],
+          returnGeometry: false,
+          start,
+          num,
+          orderByFields: [roadLayer.objectIdField]
+        });
+        const r = await roadLayer.queryFeatures(q);
+        out.push(...r.features);
+        if (!r.exceededTransferLimit) return out;
+        start += num;
+      }
+    }
+
+    const esc = v => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    // --- Consolidate flooded segments into one row per Route_LRS ---
+    const SEGMENT_FT = 10; // segment length used for flooded-length totals
+    const round2 = v => Math.round(v * 100) / 100;
+
+    function consolidateByRoute(rows, level) {
+      const groups = new Map();
+      for (const r of rows) {
+        const key = r[routeField] ?? "(no route)";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      }
+
+      // Other fields are carried over only when every segment on the route agrees
+      const skip = new Set([routeField, "Elev_Ft", roadLayer.objectIdField, "Shape__Length", "GlobalID"]);
+      const carry = Object.keys(rows[0]).filter(k => !skip.has(k));
+
+      const out = [];
+      const varies = new Set(); // fields that differ within any route get dropped entirely
+      for (const [route, segs] of groups) {
+        let minE = Infinity, maxE = -Infinity;
+        for (const s of segs) {
+          if (s.Elev_Ft < minE) minE = s.Elev_Ft;
+          if (s.Elev_Ft > maxE) maxE = s.Elev_Ft;
+        }
+        const row = {
+          [routeField]: route,
+          Flooded_Segments: segs.length,
+          Approx_Flooded_Length_Ft: segs.length * SEGMENT_FT,
+          Approx_Flooded_Length_Mi: Math.round(segs.length * SEGMENT_FT / 5280 * 1000) / 1000,
+          Min_Elev_Ft: round2(minE),
+          Max_Elev_Ft: round2(maxE),
+          Max_Depth_Ft: round2(level - minE)
+        };
+        for (const k of carry) {
+          const first = segs[0][k];
+          if (segs.every(s => s[k] === first)) row[k] = first;
+          else varies.add(k);
+        }
+        out.push(row);
+      }
+
+      // Keep only route-level fields (e.g., county, route name); drop per-segment ones (IDs, measures)
+      for (const k of varies) out.forEach(r => delete r[k]);
+
+      // Most flooded routes first
+      return out.sort((a, b) => b.Flooded_Segments - a.Flooded_Segments);
+    }
+
+    exportBtn.addEventListener("click", async () => {
+      const level = fmt(currentLevel);
+      exportBtn.disabled = true;
+      exportBtn.textContent = "Querying data…";
+
+      try {
+        // Wait for bridge matching, then drop bridge segments from the export
+        const bridgeOids = await bridgesReady;
+        const oidField = roadLayer.objectIdField;
+        const features = (await queryAll(exportWhere(level)))
+          .filter(f => !bridgeOids.has(f.attributes[oidField]));
+        if (!features.length) {
+          showToast("No flooded roads at this level.");
+          return;
+        }
+
+        const segments = features.map(f => f.attributes);
+        const grouped = groupBox.checked && routeField;
+        const rows = grouped ? consolidateByRoute(segments, parseFloat(level)) : segments;
+        const headers = Object.keys(rows[0]);
+        const csv = [
+          headers.map(esc).join(","),
+          ...rows.map(a => headers.map(h => esc(a[h])).join(","))
+        ].join("\r\n");
+
+        // BOM so Excel reads UTF-8 correctly
+        const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = grouped ? `Flooded_Routes_${level}ft.csv` : `Flooded_Roads_${level}ft.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        showToast(grouped
+          ? `Exported ${rows.length.toLocaleString()} routes (${segments.length.toLocaleString()} segments).`
+          : `Exported ${segments.length.toLocaleString()} road segments.`);
+      } catch (err) {
+        console.error("Query error:", err);
+        showToast("Error querying data. See console.", true);
+      } finally {
+        exportBtn.disabled = false;
+        exportBtn.innerHTML = exportLabel;
+      }
+    });
+  </script>
+</body>
+</html>
