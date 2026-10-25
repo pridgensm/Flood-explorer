@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Beaufort County Flood Explorer</title>
+  <title>Coastal Flood Explorer</title>
 
   <!-- ArcGIS Maps SDK for JavaScript 5.1 styles (the SDK itself is loaded by the app script below) -->
   <link rel="stylesheet" href="https://js.arcgis.com/5.1/esri/themes/light/main.css" />
@@ -153,20 +153,34 @@
     .swatch { width: 32px; margin-right: 12px; flex-shrink: 0; }
     /* Legend colors follow the map: light-basemap set by default, imagery set when body.imagery */
     body {
-      --sym-flooded: #2563eb;
       --sym-dry: rgba(156, 163, 175, 0.5);
-      --sym-bridge: #22c55e;
       --sym-nodata: #f59e0b;
+      --sym-bridgept: #7c3aed;
     }
     body.imagery {
-      --sym-flooded: #22d3ee;
+      --sym-bridgept: #f0abfc;
       --sym-dry: #cbd5e1;
-      --sym-bridge: #a3e635;
       --sym-nodata: #fbbf24;
     }
-    .sw-flooded { height: 4px; background: var(--sym-flooded); border-radius: 2px; }
     .sw-dry { height: 3px; background: var(--sym-dry); border-radius: 2px; }
     .sw-nodata { height: 0; border-top: 3px dotted var(--sym-nodata); }
+    .sw-bridgept {
+      width: 10px; height: 10px; margin: 0 23px 0 11px;
+      border-radius: 50%;
+      background: var(--sym-bridgept);
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px #6b7280;
+    }
+    .datum-row { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 0.875rem; }
+    .datum-row label { font-weight: 600; }
+    .datum-row select {
+      flex: 1; min-width: 0;
+      font: inherit; color: inherit;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+    }
     .sw-noaa-depth { height: 12px; background: rgba(30, 100, 200, 0.5); border-radius: 3px; }
     .sw-noaa-low { height: 12px; background: rgba(60, 170, 75, 0.5); border-radius: 3px; }
     .legend-sub { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin: 12px 0 8px; }
@@ -231,7 +245,7 @@
     </div>
 
     <div class="panel-body" id="panelBody">
-    <p class="subtitle">Drag the slider to simulate coastal water levels and identify inundated road segments.</p>
+    <p class="subtitle">Beaufort and Charleston counties. Drag the slider to simulate coastal water levels and identify inundated road segments.</p>
 
     <div class="slider-head">
       <label for="elevSlider">Simulated Water Level</label>
@@ -240,11 +254,30 @@
         <span>ft</span>
       </label>
     </div>
+    <div class="datum-row">
+      <label for="datumSelect">Datum</label>
+      <select id="datumSelect" disabled>
+        <option value="NAVD88" selected>NAVD88</option>
+        <option value="MHHW">MHHW (mean higher high water)</option>
+        <option value="MHW">MHW (mean high water)</option>
+        <option value="MSL">MSL (mean sea level)</option>
+        <option value="MLLW">MLLW (mean lower low water)</option>
+      </select>
+    </div>
     <input type="range" id="elevSlider" min="3.0" max="15.0" step="0.1" value="5.0" disabled />
-    <div class="ticks"><span>3 ft</span><span>NAVD88</span><span>15 ft</span></div>
-    <p class="hint">Drag the slider or type a level in the box (values outside 3 to 15 ft are allowed).</p>
+    <div class="ticks"><span id="tickMin">3 ft</span><span id="tickMid">NAVD88</span><span id="tickMax">15 ft</span></div>
+    <p class="hint" id="levelHint">Drag the slider or type a level in the box (values outside 3 to 15 ft are allowed).</p>
+    <p class="hint" id="datumNote"></p>
 
-    <label class="check" style="margin: 12px 0 0;">
+    <label class="check" style="margin: 12px 0 8px;">
+      <input type="checkbox" id="depthToggle" checked />
+      Color flooded roads by depth
+    </label>
+    <label class="check" style="margin: 0 0 8px;">
+      <input type="checkbox" id="bridgeToggle" checked />
+      Show bridge points
+    </label>
+    <label class="check" style="margin: 0;">
       <input type="checkbox" id="noaaToggle" checked disabled />
       Show NOAA sea level rise inundation
     </label>
@@ -253,9 +286,10 @@
     <hr />
 
     <h2>Road Status</h2>
-    <div class="legend-row"><div class="swatch sw-flooded"></div>Flooded (at or below water level)</div>
+    <div id="floodLegend"></div>
     <div class="legend-row"><div class="swatch sw-dry"></div>Dry</div>
     <div class="legend-row"><div class="swatch sw-nodata"></div>No elevation data</div>
+    <div class="legend-row"><div class="swatch sw-bridgept"></div>Bridge (Statewide_Bridges)</div>
     <div class="legend-sub">NOAA SLR Viewer</div>
     <div class="legend-row"><div class="swatch sw-noaa-depth"></div>Inundated (connected to tidal water)</div>
     <div class="legend-row"><div class="swatch sw-noaa-low"></div>Low-lying (below level, not connected)</div>
@@ -337,38 +371,85 @@
       throw err;
     }
 
-    // --- Layer ---
-    const roadLayer = new FeatureLayer({
-      portalItem: { id: "0759ae23793542dd8506afbde2d3ba87" },
-      layerId: 0,
-      outFields: ["*"]
-    });
+    // --- Road sources: add another county by adding a line here ---
+    // datums: each tidal datum's elevation in ft NAVD88 at the county's reference gauge (NOAA, 1983–2001 epoch),
+    // so a level in that datum + offset = level in NAVD88. Swap in VDatum values for more local numbers.
+    const ROAD_SOURCES = [
+      { county: "Beaufort",   itemId: "0759ae23793542dd8506afbde2d3ba87", layerId: 0,
+        gauge: "Fort Pulaski 8670870",          // MLLW=0: MHHW 2.287, MHW 2.174, MSL 1.165, NAVD88 1.235 m
+        datums: { MHHW: 3.45, MHW: 3.08, MSL: -0.23, MLLW: -4.05 } },
+      { county: "Charleston", itemId: "2538464dc97a442b9dea0b35d5d82e42", layerId: 0,
+        gauge: "Wando River Entrance 8665192",  // MLLW=0: MHHW 1.806, MHW 1.697, MSL 0.918, NAVD88 0.971 m
+        datums: { MHHW: 2.74, MHW: 2.38, MSL: -0.17, MLLW: -3.19 } }
+    ];
+    // Field names are detected per layer (case-insensitive), so counties can name them differently
+    const ELEV_NAMES  = ["elev_ft", "elevft", "elev", "elevation_ft", "elevation"];
+    const ROUTE_NAMES = ["route_lrs", "routelrs", "route_id", "route"];
 
-    // Roads live in a group so the bridge "eraser" layer only cuts out roads, not the basemap
-    const roadGroup = new GroupLayer({ title: "Roads", layers: [roadLayer] });
+    let roads = ROAD_SOURCES.map(src => ({
+      ...src,
+      layer: new FeatureLayer({ portalItem: { id: src.itemId }, layerId: src.layerId, outFields: ["*"] }),
+      elevField: null,
+      routeField: null,
+      bridgeOids: new Set(), // road segments that sit on bridges (filled in after bridge matching)
+      overlay: null
+    }));
+
+    // Roads live in a group so the bridge "eraser" layers only cut out roads, not the basemap
+    const roadGroup = new GroupLayer({ title: "Roads", layers: roads.map(r => r.layer) });
 
     await mapEl.viewOnReady();
     mapEl.map.add(roadGroup);
 
-    try {
-      await roadLayer.load();
-    } catch (err) {
-      console.error("Layer load error:", err);
+    // Load every road layer; keep the ones that load and have an elevation field
+    const loadResults = await Promise.allSettled(roads.map(r => r.layer.load()));
+    const skipped = [];
+    const usable = [];
+    roads.forEach((r, i) => {
+      if (loadResults[i].status === "rejected") {
+        console.error(`${r.county} layer load error:`, loadResults[i].reason);
+        skipped.push(`${r.county} (couldn't load)`);
+        return;
+      }
+      const fields = r.layer.fields;
+      const find = list => fields.find(f => list.includes(f.name.toLowerCase()))?.name;
+      const numeric = ["double", "single", "integer", "small-integer"];
+      r.elevField = find(ELEV_NAMES) ?? fields.find(f => /elev/i.test(f.name) && numeric.includes(f.type))?.name ?? null;
+      r.routeField = find(ROUTE_NAMES) ?? null;
+      if (!r.elevField) {
+        console.error(`${r.county}: no elevation field found. Fields: ${fields.map(f => f.name).join(", ")}`);
+        skipped.push(`${r.county} (no elevation field; field names are in the console)`);
+        return;
+      }
+      console.info(`${r.county}: elevation field "${r.elevField}", route field "${r.routeField ?? "none"}"`);
+      usable.push(r);
+    });
+    roads.filter(r => !usable.includes(r)).forEach(r => roadGroup.remove(r.layer));
+    roads = usable;
+    const skippedNote = skipped.length ? ` Skipped: ${skipped.join("; ")}.` : "";
+
+    if (!roads.length) {
       levelInput.placeholder = "--";
-      showToast(`Failed to load layer: ${err.message}. Check that it's public and the item ID is correct.`, true);
-      throw err;
+      showToast(`No road layers could be used.${skippedNote} Check that the layers are public and the item IDs are correct.`, true);
+      throw new Error("No usable road layers");
     }
 
+    // Frame every county that loaded
+    const fullExt = roads.map(r => r.layer.fullExtent).filter(Boolean).reduce((a, b) => a.union(b), null);
+    if (fullExt) mapEl.view.goTo(fullExt.clone().expand(1.1)).catch(() => {});
+
     // --- Popup ---
-    const ELEV_EXPR = {
+    const elevExpr = r => ({
       name: "elev",
-      expression: "IIf(IsEmpty($feature.Elev_Ft), 'no elevation data', Text($feature.Elev_Ft, '#,##0.0') + ' ft')"
-    };
-    roadLayer.popupTemplate = {
-      title: "Road Elevation Data",
-      content: "This road segment sits at <b>{expression/elev}</b> (NAVD88).",
-      expressionInfos: [ELEV_EXPR]
-    };
+      expression: `IIf(IsEmpty($feature["${r.elevField}"]), 'no elevation data', Text($feature["${r.elevField}"], '#,##0.0') + ' ft')`
+    });
+    for (const r of roads) {
+      r.layer.popupTemplate = {
+        title: `${r.county} County road elevation`,
+        content: "This road segment sits at <b>{expression/elev}</b> (NAVD88).",
+        expressionInfos: [elevExpr(r)]
+      };
+    }
 
     // --- Symbology palettes: one for light basemaps, one for imagery ---
     // Edit colors [R, G, B, alpha], widths (pt), and the dry-road effect here.
@@ -376,17 +457,41 @@
       light: {
         road:   { color: [37, 99, 235, 1],  width: 3 },    // flooded = blue
         nodata: { color: [245, 158, 11, 1], width: 2 },    // amber dots
+        bridgePt: { color: [124, 58, 237, 1] },            // bridge points = purple
+        // depth ramp, shallow → deep (one color per DEPTH_CLASSES entry)
+        depth: [[147, 197, 253, 1], [59, 130, 246, 1], [29, 78, 216, 1], [109, 40, 217, 1], [134, 25, 143, 1], [74, 4, 78, 1]],
         dryEffect: "grayscale(100%) opacity(35%)"          // dry = faded gray
       },
       imagery: {
         road:   { color: [34, 211, 238, 1], width: 3.5 },  // flooded = cyan
         nodata: { color: [251, 191, 36, 1], width: 2.5 },  // bright amber dots
+        bridgePt: { color: [240, 171, 252, 1] },           // bridge points = light magenta
+        depth: [[103, 232, 249, 1], [34, 211, 238, 1], [14, 165, 233, 1], [99, 102, 241, 1], [192, 38, 211, 1], [244, 63, 94, 1]],
         dryEffect: "grayscale(100%) brightness(300%) opacity(65%)" // dry = soft white
       }
     };
     const IMAGERY_BASEMAPS = ["satellite", "hybrid"];
     let palette = PALETTES.light;
-    let bridgeOverlay = null; // client-side "eraser" layer of road segments that sit on bridges
+    let bridgeLayer = null;   // Statewide_Bridges layer (shown as points, also used for matching)
+    let rendererTimer;
+    const depthToggle = document.getElementById("depthToggle");
+    const bridgeToggle = document.getElementById("bridgeToggle");
+
+    function bridgePtRenderer() {
+      const c = palette.bridgePt.color;
+      const gt = bridgeLayer.geometryType;
+      if (gt === "point" || gt === "multipoint") {
+        return { type: "simple", symbol: { type: "simple-marker", style: "circle", size: 8, color: c, outline: { color: [255, 255, 255, 1], width: 1.5 } } };
+      }
+      if (gt === "polyline") return { type: "simple", symbol: { type: "simple-line", color: c, width: 2 } };
+      return { type: "simple", symbol: { type: "simple-fill", color: [c[0], c[1], c[2], 0.3], outline: { color: c, width: 1 } } };
+    }
+
+    function applyBridgePoints() {
+      if (!bridgeLayer?.loaded) return;
+      bridgeLayer.renderer = bridgePtRenderer();
+      if (!bridgeLayer.popupTemplate) bridgeLayer.popupTemplate = bridgeLayer.createPopupTemplate();
+    }
 
     // Opaque line slightly wider than the roads; its blend mode erases the roads beneath it
     const bridgeRenderer = () => ({
@@ -394,31 +499,82 @@
       symbol: { type: "simple-line", color: [0, 0, 0, 1], width: palette.road.width + 1, cap: "butt" }
     });
 
-    // Categories never change, so Arcade runs once per palette switch, not per slider move
-    function applyRenderer() {
-      roadLayer.renderer = {
-        type: "unique-value",
-        valueExpression: "IIf(IsEmpty($feature.Elev_Ft), 'NoData', 'Road')",
-        uniqueValueInfos: [
-          { value: "Road",   symbol: { type: "simple-line", ...palette.road } },
-          { value: "NoData", symbol: { type: "simple-line", ...palette.nodata, style: "dot" } }
-        ]
-      };
-      if (bridgeOverlay) bridgeOverlay.renderer = bridgeRenderer();
+    // Flood depth classes (ft above the road surface) and their colors, light → dark
+    const DEPTH_CLASSES = [
+      { lo: 0, hi: 0.5, label: "0 – 0.5 ft" },
+      { lo: 0.5, hi: 1, label: "0.5 – 1 ft" },
+      { lo: 1, hi: 2, label: "1 – 2 ft" },
+      { lo: 2, hi: 3, label: "2 – 3 ft" },
+      { lo: 3, hi: 5, label: "3 – 5 ft" },
+      { lo: 5, hi: Infinity, label: "> 5 ft" }
+    ];
+    const rgba = c => `rgba(${c[0]},${c[1]},${c[2]},${c[3] ?? 1})`;
+
+    // Class breaks run on the plain elevation field (no Arcade): depth d in [lo, hi) ⇔ Elev in (L−hi, L−lo]
+    function applyRoadRenderer() {
+      const nodataSym = { type: "simple-line", ...palette.nodata, style: "dot" };
+      for (const r of roads) {
+        if (!depthToggle.checked) {
+          r.layer.renderer = {
+            type: "unique-value",
+            valueExpression: `IIf(IsEmpty($feature["${r.elevField}"]), 'NoData', 'Road')`,
+            uniqueValueInfos: [
+              { value: "Road",   symbol: { type: "simple-line", ...palette.road } },
+              { value: "NoData", symbol: nodataSym }
+            ]
+          };
+          continue;
+        }
+        const L = navdFor(r) + 0.0005; // tiny pad so segments exactly at the water level count as flooded
+        const classBreakInfos = DEPTH_CLASSES.map((c, i) => ({
+          minValue: c.hi === Infinity ? -10000 : L - c.hi,
+          maxValue: L - c.lo,
+          symbol: { type: "simple-line", color: palette.depth[i], width: palette.road.width }
+        }));
+        // Dry segments keep the base road color; the feature effect fades them to gray
+        classBreakInfos.push({ minValue: L, maxValue: 100000, symbol: { type: "simple-line", ...palette.road } });
+        r.layer.renderer = { type: "class-breaks", field: r.elevField, defaultSymbol: nodataSym, classBreakInfos };
+      }
     }
-    applyRenderer();
+
+    function buildFloodLegend() {
+      const el = document.getElementById("floodLegend");
+      const row = (color, text) =>
+        `<div class="legend-row"><div class="swatch" style="height:4px;border-radius:2px;background:${rgba(color)}"></div>${text}</div>`;
+      el.innerHTML = depthToggle.checked
+        ? DEPTH_CLASSES.map((c, i) => row(palette.depth[i], `Flooded ${c.label} deep`)).join("")
+        : row(palette.road.color, "Flooded (at or below water level)");
+    }
+
+    // Only the depth renderer depends on the level, so don't rebuild the plain renderer on every slider move
+    const scheduleRoadRenderer = () => {
+      if (!depthToggle.checked) return;
+      clearTimeout(rendererTimer);
+      rendererTimer = setTimeout(applyRoadRenderer, 120);
+    };
+
+    function applyRenderer() {
+      applyRoadRenderer();
+      buildFloodLegend();
+      for (const r of roads) if (r.overlay) r.overlay.renderer = bridgeRenderer();
+      applyBridgePoints();
+    }
 
     // --- Where clauses (shared logic so map and export always agree) ---
-    const displayWhere = lvl => `Elev_Ft <= ${lvl} OR Elev_Ft IS NULL`; // full color
-    const exportWhere  = lvl => `Elev_Ft <= ${lvl}`;                    // flooded (bridges removed after query)
+    const displayWhere = (r, lvl) => `${r.elevField} <= ${lvl} OR ${r.elevField} IS NULL`; // full color
+    const exportWhere  = (r, lvl) => `${r.elevField} <= ${lvl}`;                           // flooded (bridges removed after query)
 
     // --- Slider: feature effect is applied client-side, no renderer rebuild ---
-    function updateFlood(level) {
-      roadLayer.featureEffect = {
-        filter: { where: displayWhere(level) },
-        excludedEffect: palette.dryEffect
-      };
+    function updateFlood() {
+      for (const r of roads) {
+        r.layer.featureEffect = {
+          filter: { where: displayWhere(r, navdStr(r)) },
+          excludedEffect: palette.dryEffect
+        };
+      }
     }
+
+    bridgeToggle.addEventListener("change", () => { if (bridgeLayer) bridgeLayer.visible = bridgeToggle.checked; });
 
     // --- Bridges: match road segments to Statewide_Bridges live, on every page load ---
     // Each bridge flags road segments within (half its length + slop) of the bridge location.
@@ -435,64 +591,72 @@
     }
 
     async function matchBridges() {
-      const bridgeLayer = new FeatureLayer({ url: BRIDGE_URL });
+      bridgeLayer = new FeatureLayer({ url: BRIDGE_URL, title: "Bridges", outFields: ["*"], visible: bridgeToggle.checked });
+      mapEl.map.add(bridgeLayer); // top of the stack so the points sit above the roads
       await bridgeLayer.load();
+      applyBridgePoints();
 
       const lenField = bridgeLayer.fields.find(f => f.name.toLowerCase() === BRIDGE_LENGTH_FIELD.toLowerCase())?.name;
       if (!lenField) console.warn(`${BRIDGE_LENGTH_FIELD} not found on the bridge layer; using a ${SLOP_FT} ft radius only.`);
       const isPoint = ["point", "multipoint"].includes(bridgeLayer.geometryType);
       console.info(`Bridge layer: ${bridgeLayer.geometryType}, length field: ${lenField ?? "none"}`);
 
-      // Bridges inside the road layer's extent (paged)
-      const bridges = [];
+      // For each county: bridges inside its extent (paged), then the road segments near each one
+      const seen = new Set();
       const num = bridgeLayer.capabilities?.query?.maxRecordCount || 1000;
-      for (let start = 0; ; start += num) {
-        const q = bridgeLayer.createQuery();
-        Object.assign(q, {
-          where: "1=1",
-          geometry: roadLayer.fullExtent ?? mapEl.view.extent,
-          spatialRelationship: "intersects",
-          outFields: [bridgeLayer.objectIdField, lenField].filter(Boolean),
-          returnGeometry: true,
-          start,
-          num,
-          orderByFields: [bridgeLayer.objectIdField]
-        });
-        const r = await bridgeLayer.queryFeatures(q);
-        bridges.push(...r.features);
-        if (!r.exceededTransferLimit) break;
-      }
-
-      // Road segments near each bridge
-      const oids = new Set();
-      await runPool(bridges, CONCURRENCY, async b => {
-        const len = lenField ? Number(b.attributes[lenField]) * LENGTH_TO_FT : NaN;
-        const radius = (isPoint && Number.isFinite(len) && len > 0 ? len / 2 : 0) + SLOP_FT;
-        const q = roadLayer.createQuery();
-        Object.assign(q, {
-          where: "1=1",
-          geometry: b.geometry,
-          distance: radius,
-          units: "feet",
-          spatialRelationship: "intersects"
-        });
-        try {
-          (await roadLayer.queryObjectIds(q)).forEach(id => oids.add(id));
-        } catch (err) {
-          console.warn("Bridge match failed for one bridge:", err);
+      for (const road of roads) {
+        const bridges = [];
+        for (let start = 0; ; start += num) {
+          const q = bridgeLayer.createQuery();
+          Object.assign(q, {
+            where: "1=1",
+            geometry: road.layer.fullExtent ?? mapEl.view.extent,
+            spatialRelationship: "intersects",
+            outFields: [bridgeLayer.objectIdField, lenField].filter(Boolean),
+            returnGeometry: true,
+            start,
+            num,
+            orderByFields: [bridgeLayer.objectIdField]
+          });
+          const r = await bridgeLayer.queryFeatures(q);
+          bridges.push(...r.features);
+          if (!r.exceededTransferLimit) break;
         }
-      });
-      return { oids, bridgeCount: bridges.length };
+        bridges.forEach(b => seen.add(b.attributes[bridgeLayer.objectIdField]));
+
+        const oids = new Set();
+        await runPool(bridges, CONCURRENCY, async b => {
+          const len = lenField ? Number(b.attributes[lenField]) * LENGTH_TO_FT : NaN;
+          const radius = (isPoint && Number.isFinite(len) && len > 0 ? len / 2 : 0) + SLOP_FT;
+          const q = road.layer.createQuery();
+          Object.assign(q, {
+            where: "1=1",
+            geometry: b.geometry,
+            distance: radius,
+            units: "feet",
+            spatialRelationship: "intersects"
+          });
+          try {
+            (await road.layer.queryObjectIds(q)).forEach(id => oids.add(id));
+          } catch (err) {
+            console.warn(`Bridge match failed for one bridge (${road.county}):`, err);
+          }
+        });
+        road.bridgeOids = oids;
+        if (oids.size) await buildBridgeOverlay(road);
+      }
+      return { bridgeCount: seen.size };
     }
 
-    // Draw matched segments as their own layer on top of the roads
-    async function buildBridgeOverlay(oids) {
-      const keep = new Set([roadLayer.objectIdField.toLowerCase(), "elev_ft", "route_lrs"]);
-      const fields = roadLayer.fields.filter(f => keep.has(f.name.toLowerCase()));
-      const ids = [...oids];
+    // Draw matched segments as their own layer on top of the roads (it erases them; see bridgeRenderer)
+    async function buildBridgeOverlay(road) {
+      const lyr = road.layer;
+      const keep = new Set([lyr.objectIdField.toLowerCase(), road.elevField.toLowerCase()]);
+      const fields = lyr.fields.filter(f => keep.has(f.name.toLowerCase()));
+      const ids = [...road.bridgeOids];
       const features = [];
       for (let i = 0; i < ids.length; i += 1000) {
-        const q = roadLayer.createQuery();
+        const q = lyr.createQuery();
         Object.assign(q, {
           where: "1=1",
           objectIds: ids.slice(i, i + 1000),
@@ -500,15 +664,15 @@
           returnGeometry: true,
           outSpatialReference: mapEl.view.spatialReference
         });
-        const r = await roadLayer.queryFeatures(q);
+        const r = await lyr.queryFeatures(q);
         features.push(...r.features);
       }
 
-      bridgeOverlay = new FeatureLayer({
-        title: "Bridge segments",
+      road.overlay = new FeatureLayer({
+        title: `${road.county} bridge segments`,
         source: features,
         fields: fields.map(f => f.clone()),
-        objectIdField: roadLayer.objectIdField,
+        objectIdField: lyr.objectIdField,
         geometryType: "polyline",
         spatialReference: mapEl.view.spatialReference,
         renderer: bridgeRenderer(),
@@ -516,27 +680,25 @@
         popupEnabled: false,
         listMode: "hide"
       });
-      roadGroup.add(bridgeOverlay); // added last, so it sits above the roads in the group
+      roadGroup.add(road.overlay); // added last, so it sits above the roads in the group
     }
 
-    showToast("Removing bridges from flood results…", false, true);
+    showToast(`Removing bridges from flood results…${skippedNote}`, false, true);
     const bridgesReady = matchBridges()
-      .then(async ({ oids, bridgeCount }) => {
-        if (oids.size) await buildBridgeOverlay(oids);
-        showToast(`${bridgeCount.toLocaleString()} bridges removed from flood results.`);
-        return oids;
+      .then(({ bridgeCount }) => {
+        showToast(`${bridgeCount.toLocaleString()} bridges removed from flood results.${skippedNote}`, skipped.length > 0);
       })
       .catch(err => {
         console.error("Bridge matching failed:", err);
         showToast("Couldn't load the bridge layer, so bridges are treated as roads. See console.", true);
-        return new Set();
       });
 
     // --- NOAA Sea Level Rise Viewer layers, driven by the same NAVD88 level ---
     // NOAA publishes 0–10 ft above MHHW in 0.5 ft steps (dc_slr/slr_0ft … slr_10ft).
     // NAVD88 → MHHW uses a single local offset; NOAA's own layers handle spatial MHHW variation.
     const NOAA_BASE = "https://maps.coast.noaa.gov/arcgis/rest/services/dc_slr/";
-    const MHHW_NAVD88_FT = 3.45; // Fort Pulaski 8670870: MHHW 2.287 m, NAVD88 1.235 m above MLLW (1983–2001 epoch)
+    // NOAA layers are mapped above MHHW everywhere, so one step is right for every county when the datum is MHHW.
+    // In other datums the step is converted using the first county's gauge.
     const NOAA_OPACITY = 0.6;
     const noaaToggle = document.getElementById("noaaToggle");
     const noaaNote = document.getElementById("noaaNote");
@@ -544,9 +706,9 @@
     let noaaShown = null;
     let noaaToken = 0;
 
-    // NAVD88 level → nearest NOAA step (ft above MHHW), or null if below MHHW
-    function noaaStep(levelNavd) {
-      const slr = levelNavd - MHHW_NAVD88_FT;
+    // Water level → nearest NOAA step (ft above MHHW), or null if below MHHW
+    function noaaStep() {
+      const slr = levelIn(roads[0], "MHHW");
       if (slr < -0.25) return null;
       return Math.min(10, Math.max(0, Math.round(slr * 2) / 2));
     }
@@ -585,34 +747,76 @@
       for (const l of noaaCache.values()) if (l !== noaaShown) l.visible = false;
     }
 
-    function updateNoaa(levelNavd) {
-      const step = noaaToggle.checked ? noaaStep(levelNavd) : null;
+    function updateNoaa() {
+      const step = noaaToggle.checked ? noaaStep() : null;
       showNoaa(step == null ? null : noaaLayerFor(step));
 
       if (!noaaToggle.checked) {
         noaaNote.textContent = "";
       } else if (step == null) {
-        noaaNote.textContent = `Below MHHW (≈${MHHW_NAVD88_FT} ft NAVD88), so NOAA shows no inundation.`;
+        noaaNote.textContent = "Below MHHW, so NOAA shows no inundation.";
       } else {
-        const capped = levelNavd - MHHW_NAVD88_FT > 10.25 ? " (NOAA's maximum)" : "";
-        noaaNote.textContent = `Showing NOAA ${step} ft above MHHW ≈ ${(step + MHHW_NAVD88_FT).toFixed(2)} ft NAVD88${capped}.`;
+        const capped = levelIn(roads[0], "MHHW") > 10.25 ? " (NOAA's maximum)" : "";
+        const basis = datumKey === "MHHW" || roads.length < 2 ? "" : ` (converted at ${roads[0].county}; choose MHHW for an exact match everywhere)`;
+        noaaNote.textContent = `Showing NOAA ${step} ft above MHHW${capped}${basis}.`;
       }
     }
 
-    noaaToggle.addEventListener("change", () => updateNoaa(currentLevel));
+    noaaToggle.addEventListener("change", updateNoaa);
 
     // --- Water level state, shared by slider + key-in box ---
-    let currentLevel = parseFloat(slider.value);
+    // levelShown is the level in the selected datum. With NAVD88 every county floods at the same elevation;
+    // with a tidal datum each county gets its own NAVD88 level from its gauge offsets.
+    const SLIDER_NAVD_MIN = 3, SLIDER_NAVD_MAX = 15; // slider range, expressed in NAVD88 at the first county
+    let levelShown = parseFloat(slider.value);
+    let datumKey = "NAVD88";
+    const datumSelect = document.getElementById("datumSelect");
+    const tickMin = document.getElementById("tickMin");
+    const tickMid = document.getElementById("tickMid");
+    const tickMax = document.getElementById("tickMax");
+    const levelHint = document.getElementById("levelHint");
+    const datumNote = document.getElementById("datumNote");
     const fmt = v => v.toFixed(1);
+    const round2 = v => Math.round(v * 100) / 100;
+    const off = (r, key) => key === "NAVD88" ? 0 : r.datums?.[key] ?? 0;   // datum elevation, ft NAVD88
+    const navdFor = r => round2(levelShown + off(r, datumKey));            // county's flood level, ft NAVD88
+    const navdStr = r => navdFor(r).toFixed(2);
+    const levelIn = (r, key) => levelShown + off(r, datumKey) - off(r, key); // same water, another datum
+
+    function refreshAll() {
+      updateNoaa();
+      updateFlood();
+      scheduleRoadRenderer();
+    }
 
     function setLevel(v, source) {
-      currentLevel = Math.round(v * 10) / 10;
-      if (source !== "input") levelInput.value = fmt(currentLevel);
-      if (source !== "slider") slider.value = currentLevel; // slider pins at its ends for out-of-range values
-      miniLevel.textContent = `${fmt(currentLevel)} ft`;
-      updateNoaa(currentLevel);
-      updateFlood(fmt(currentLevel));
+      levelShown = round2(v);
+      if (source !== "input") levelInput.value = fmt(levelShown);
+      if (source !== "slider") slider.value = levelShown; // slider pins at its ends for out-of-range values
+      miniLevel.textContent = `${fmt(levelShown)} ft ${datumKey}`;
+      refreshAll();
     }
+
+    // Switching datums keeps the same water level at the first county and re-expresses it in the new datum
+    function setDatum(key) {
+      const ref = roads[0];
+      levelShown = round2(levelIn(ref, key));
+      datumKey = key;
+      const lo = Math.round((SLIDER_NAVD_MIN - off(ref, key)) * 2) / 2;
+      const hi = Math.round((SLIDER_NAVD_MAX - off(ref, key)) * 2) / 2;
+      slider.min = lo;
+      slider.max = hi;
+      tickMin.textContent = `${lo} ft`;
+      tickMid.textContent = key;
+      tickMax.textContent = `${hi} ft`;
+      levelInput.setAttribute("aria-label", `Water level in feet (${key})`);
+      levelHint.textContent = `Drag the slider or type a level in the box (values outside ${lo} to ${hi} ft are allowed).`;
+      datumNote.textContent = key === "NAVD88" ? "" :
+        `${key} in ft NAVD88: ` + roads.map(r => `${r.county} ${off(r, key) >= 0 ? "+" : ""}${off(r, key)} (${r.gauge})`).join(", ") + ".";
+      setLevel(levelShown);
+      applyRoadRenderer(); // each county's level may have moved, so redraw now rather than after the delay
+    }
+    datumSelect.addEventListener("change", e => setDatum(e.target.value));
 
     slider.addEventListener("input", e => setLevel(parseFloat(e.target.value), "slider"));
 
@@ -622,10 +826,12 @@
       if (Number.isFinite(v)) setLevel(v, "input");
     });
     // On Enter / blur, tidy the box back to one decimal (or the last valid value)
-    levelInput.addEventListener("change", () => { levelInput.value = fmt(currentLevel); });
+    levelInput.addEventListener("change", () => { levelInput.value = fmt(levelShown); });
     levelInput.addEventListener("keydown", e => { if (e.key === "Enter") levelInput.blur(); });
 
-    setLevel(currentLevel);
+    setDatum("NAVD88");
+    applyRenderer();
+    depthToggle.addEventListener("change", applyRenderer);
 
     // --- Swap palettes (map + legend) whenever the basemap changes ---
     reactiveUtils.watch(
@@ -637,42 +843,43 @@
         if (next === palette) return;
         palette = next;
         applyRenderer();
-        updateFlood(fmt(currentLevel));
+        updateFlood();
       },
       { initial: true }
     );
 
-    // --- Route grouping option (only if the layer has a Route_LRS field) ---
+    // --- Route grouping option (needs a route field on at least one layer) ---
     const groupBox = document.getElementById("groupByRoute");
-    const routeField = roadLayer.fields.find(f => f.name.toLowerCase() === "route_lrs")?.name;
-    if (routeField) {
+    if (roads.some(r => r.routeField)) {
       groupBox.disabled = false;
     } else {
       groupBox.checked = false;
-      groupBox.closest("label").title = "No Route_LRS field found in this layer";
+      groupBox.closest("label").title = "No Route_LRS field found in the road layers";
     }
 
     slider.disabled = false;
     levelInput.disabled = false;
+    datumSelect.disabled = false;
     noaaToggle.disabled = false;
     exportBtn.disabled = false;
 
     // --- Export ---
-    async function queryAll(where) {
-      const num = roadLayer.capabilities?.query?.maxRecordCount || 1000;
+    async function queryAll(road, where) {
+      const lyr = road.layer;
+      const num = lyr.capabilities?.query?.maxRecordCount || 1000;
       const out = [];
       let start = 0;
       while (true) {
-        const q = roadLayer.createQuery();
+        const q = lyr.createQuery();
         Object.assign(q, {
           where,
           outFields: ["*"],
           returnGeometry: false,
           start,
           num,
-          orderByFields: [roadLayer.objectIdField]
+          orderByFields: [lyr.objectIdField]
         });
-        const r = await roadLayer.queryFeatures(q);
+        const r = await lyr.queryFeatures(q);
         out.push(...r.features);
         if (!r.exceededTransferLimit) return out;
         start += num;
@@ -685,38 +892,39 @@
       return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
 
-    // --- Consolidate flooded segments into one row per Route_LRS ---
+    // --- Consolidate flooded segments into one row per county + Route_LRS ---
     const SEGMENT_FT = 10; // segment length used for flooded-length totals
-    const round2 = v => Math.round(v * 100) / 100;
-
-    function consolidateByRoute(rows, level) {
+    function consolidateByRoute(rows) {
       const groups = new Map();
       for (const r of rows) {
-        const key = r[routeField] ?? "(no route)";
+        const key = `${r.County}\u0000${r.Route_LRS ?? "(no route)"}`;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(r);
       }
 
       // Other fields are carried over only when every segment on the route agrees
-      const skip = new Set([routeField, "Elev_Ft", roadLayer.objectIdField, "Shape__Length", "GlobalID"]);
-      const carry = Object.keys(rows[0]).filter(k => !skip.has(k));
+      const skip = new Set(["County", "Route_LRS", "Water_Level_NAVD88_Ft", "Elev_Ft", "Flood_Depth_Ft", "OBJECTID", "FID", "Shape__Length", "GlobalID",
+        ...roads.flatMap(r => [r.layer.objectIdField, r.elevField, r.routeField].filter(Boolean))]);
+      const carry = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !skip.has(k));
 
       const out = [];
       const varies = new Set(); // fields that differ within any route get dropped entirely
-      for (const [route, segs] of groups) {
+      for (const segs of groups.values()) {
         let minE = Infinity, maxE = -Infinity;
         for (const s of segs) {
           if (s.Elev_Ft < minE) minE = s.Elev_Ft;
           if (s.Elev_Ft > maxE) maxE = s.Elev_Ft;
         }
         const row = {
-          [routeField]: route,
+          County: segs[0].County,
+          Route_LRS: segs[0].Route_LRS ?? "(no route)",
+          Water_Level_NAVD88_Ft: segs[0].Water_Level_NAVD88_Ft,
           Flooded_Segments: segs.length,
           Approx_Flooded_Length_Ft: segs.length * SEGMENT_FT,
           Approx_Flooded_Length_Mi: Math.round(segs.length * SEGMENT_FT / 5280 * 1000) / 1000,
           Min_Elev_Ft: round2(minE),
           Max_Elev_Ft: round2(maxE),
-          Max_Depth_Ft: round2(level - minE)
+          Max_Depth_Ft: round2(segs[0].Water_Level_NAVD88_Ft - minE)
         };
         for (const k of carry) {
           const first = segs[0][k];
@@ -734,25 +942,41 @@
     }
 
     exportBtn.addEventListener("click", async () => {
-      const level = fmt(currentLevel);
       exportBtn.disabled = true;
       exportBtn.textContent = "Querying data…";
 
       try {
         // Wait for bridge matching, then drop bridge segments from the export
-        const bridgeOids = await bridgesReady;
-        const oidField = roadLayer.objectIdField;
-        const features = (await queryAll(exportWhere(level)))
-          .filter(f => !bridgeOids.has(f.attributes[oidField]));
-        if (!features.length) {
+        await bridgesReady;
+        const segments = [];
+        for (const road of roads) {
+          const lvl = navdFor(road);
+          const oidField = road.layer.objectIdField;
+          const feats = (await queryAll(road, exportWhere(road, navdStr(road))))
+            .filter(f => !road.bridgeOids.has(f.attributes[oidField]));
+          for (const f of feats) {
+            const a = f.attributes;
+            const elev = a[road.elevField];
+            // Same leading columns for every county; the layer's own fields follow without overwriting them
+            const row = {
+              County: road.county,
+              Route_LRS: road.routeField ? a[road.routeField] : null,
+              Water_Level_NAVD88_Ft: lvl,
+              Elev_Ft: elev,
+              Flood_Depth_Ft: round2(lvl - elev)
+            };
+            for (const [k, v] of Object.entries(a)) if (!(k in row)) row[k] = v;
+            segments.push(row);
+          }
+        }
+        if (!segments.length) {
           showToast("No flooded roads at this level.");
           return;
         }
 
-        const segments = features.map(f => f.attributes);
-        const grouped = groupBox.checked && routeField;
-        const rows = grouped ? consolidateByRoute(segments, parseFloat(level)) : segments;
-        const headers = Object.keys(rows[0]);
+        const grouped = groupBox.checked;
+        const rows = grouped ? consolidateByRoute(segments) : segments;
+        const headers = [...new Set(rows.flatMap(r => Object.keys(r)))];
         const csv = [
           headers.map(esc).join(","),
           ...rows.map(a => headers.map(h => esc(a[h])).join(","))
@@ -763,11 +987,12 @@
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = grouped ? `Flooded_Routes_${level}ft.csv` : `Flooded_Roads_${level}ft.csv`;
+        const tag = `${fmt(levelShown)}ft_${datumKey}`;
+        link.download = grouped ? `Flooded_Routes_${tag}.csv` : `Flooded_Roads_${tag}.csv`;
         document.body.appendChild(link);
         link.click();
         link.remove();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 2000); // revoking immediately can cancel the download in some browsers
 
         showToast(grouped
           ? `Exported ${rows.length.toLocaleString()} routes (${segments.length.toLocaleString()} segments).`
