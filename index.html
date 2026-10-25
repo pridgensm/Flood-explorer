@@ -282,6 +282,7 @@
       Show NOAA sea level rise inundation
     </label>
     <p class="hint noaa-note" id="noaaNote"></p>
+    <p class="hint" id="zoomHint" hidden>Zoom in to see roads (hidden at county scale on phones to save memory).</p>
 
     <hr />
 
@@ -436,6 +437,22 @@
       levelInput.placeholder = "--";
       showToast(`No road layers could be used.${skippedNote} Check that the layers are public and the item IDs are correct.`, true);
       throw new Error("No usable road layers");
+    }
+
+    // --- Memory: phones (especially iPhone Safari) reload or crash the page when it holds too much ---
+    // 1) Keep only the fields the map uses in the browser (the CSV export still asks the server for every field)
+    for (const r of roads) r.layer.outFields = [r.elevField, r.routeField].filter(Boolean);
+    // 2) On phones, don't draw the 10 ft road segments at county scale, where hundreds of thousands are in view
+    const IS_MOBILE = matchMedia("(pointer: coarse)").matches || matchMedia("(max-width: 820px)").matches;
+    const MOBILE_ROAD_MIN_SCALE = 100000; // roads appear once zoomed in past about 1:100,000
+    if (IS_MOBILE) {
+      for (const r of roads) r.layer.minScale = MOBILE_ROAD_MIN_SCALE;
+      const zoomHint = document.getElementById("zoomHint");
+      reactiveUtils.watch(
+        () => mapEl.view?.scale,
+        scale => { zoomHint.hidden = !(scale > MOBILE_ROAD_MIN_SCALE); },
+        { initial: true }
+      );
     }
 
     // Frame every county that loaded
@@ -689,7 +706,8 @@
         renderer: bridgeRenderer(),
         blendMode: "destination-out", // erase road segments on bridges (within the road group only)
         popupEnabled: false,
-        listMode: "hide"
+        listMode: "hide",
+        minScale: road.layer.minScale // match the roads (hidden at county scale on phones)
       });
       roadGroup.add(road.overlay); // added last, so it sits above the roads in the group
     }
@@ -711,6 +729,7 @@
     // NOAA layers are mapped above MHHW everywhere, so one step is right for every county when the datum is MHHW.
     // In other datums the step is converted using the first county's gauge.
     const NOAA_OPACITY = 0.6;
+    const NOAA_KEEP = 3; // 3) only keep the last few NOAA steps loaded; each one holds its own tile cache
     const noaaToggle = document.getElementById("noaaToggle");
     const noaaNote = document.getElementById("noaaNote");
     const noaaCache = new Map();
@@ -726,7 +745,11 @@
 
     function noaaLayerFor(step) {
       const name = `slr_${String(step).replace(".", "_")}ft`; // 0 → slr_0ft, 2.5 → slr_2_5ft
-      if (!noaaCache.has(name)) {
+      if (noaaCache.has(name)) {
+        const lyr = noaaCache.get(name); // re-insert so the Map's order tracks most recent use
+        noaaCache.delete(name);
+        noaaCache.set(name, lyr);
+      } else {
         const lyr = new TileLayer({
           url: `${NOAA_BASE}${name}/MapServer`,
           title: `NOAA ${step} ft SLR`,
@@ -740,11 +763,15 @@
       return noaaCache.get(name);
     }
 
-    // Show the new step once its tiles are drawn, then hide the old one (avoids a blank flash)
+    // Show the new step once its tiles are drawn, then hide the old one (avoids a blank flash).
+    // While dragging, only the step on screen and the newest request stay visible, so a fast drag
+    // doesn't load tiles for every step it passes through.
+    let noaaOnScreen = null;
     async function showNoaa(next) {
       if (next === noaaShown) return;
       noaaShown = next;
       const token = ++noaaToken;
+      for (const l of noaaCache.values()) if (l !== next && l !== noaaOnScreen) l.visible = false;
       if (next) {
         next.visible = true;
         try {
@@ -755,7 +782,17 @@
         }
       }
       if (token !== noaaToken) return; // a newer level took over
+      noaaOnScreen = next;
       for (const l of noaaCache.values()) if (l !== noaaShown) l.visible = false;
+
+      // Drop the least recently used steps beyond NOAA_KEEP to free their tile caches
+      for (const [name, l] of noaaCache) {
+        if (noaaCache.size <= NOAA_KEEP) break;
+        if (l === noaaShown) continue;
+        noaaCache.delete(name);
+        mapEl.map.remove(l);
+        l.destroy();
+      }
     }
 
     function updateNoaa() {
